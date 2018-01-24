@@ -4,6 +4,7 @@ import pytz
 import json
 import pandas as pd
 import numpy as np
+import math
 
 from datetime import datetime
 from dateutil import tz
@@ -28,8 +29,8 @@ def date_to_milliseconds(date_str):
     # return the difference in time
     return int((d - epoch).total_seconds() * 1000.0)
 
-print(date_to_milliseconds("January 01, 2018"))
-print(date_to_milliseconds("11 hours ago UTC"))
+#print(date_to_milliseconds("January 01, 2018"))
+#print(date_to_milliseconds("11 hours ago UTC"))
 print(date_to_milliseconds("now UTC"))
 
 def interval_to_milliseconds(interval):
@@ -57,14 +58,9 @@ def interval_to_milliseconds(interval):
             pass
     return ms
 
-from binance.client import Client
-
-print(interval_to_milliseconds(Client.KLINE_INTERVAL_1MINUTE))
-print(interval_to_milliseconds(Client.KLINE_INTERVAL_30MINUTE))
-print(interval_to_milliseconds(Client.KLINE_INTERVAL_1WEEK))
-
-from binance.client import Client
-import time
+#print(interval_to_milliseconds(Client.KLINE_INTERVAL_1MINUTE))
+#print(interval_to_milliseconds(Client.KLINE_INTERVAL_30MINUTE))
+#print(interval_to_milliseconds(Client.KLINE_INTERVAL_1WEEK))
 
 def get_historical_klines(symbol, interval, start_str, end_str=None):
     """Get Historical Klines from Binance
@@ -148,34 +144,52 @@ def macd_flag(cross,pcross):
     else:
         return 'None'
 
-def conv_date(ms):
-    dt = datetime.fromtimestamp(float(ms)/1000).strftime('%Y-%m-%d %H:%M:%S')
-    from_date = datetime.strptime(dt,"%Y-%m-%d %H:%M:%S")
-    aware_utc = pytz.utc.localize(from_date)
-    return aware_utc.astimezone(pytz.timezone('US/Eastern'))
+def vol_flag(volume,avg_volume):
+  
+    if volume > (2*avg_volume):
+        return 'BUY'
+    else:
+        return 'None'
+
+def conv_to_date(ms):
+    return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime((ms/1000)-18000))
+
+def float_to_int(number):
+    if math.isnan(number):
+        return 0
+    else:
+        return int(number)
 
 
-
-
-start = "21 Jan, 2018"
-end = "23 Jan, 2018"
-interval = Client.KLINE_INTERVAL_15MINUTE
+start = "23 Jan, 2018"
+end = "now UTC"
+#interval = Client.KLINE_INTERVAL_15MINUTE
 #interval = Client.KLINE_INTERVAL_1DAY
+interval = Client.KLINE_INTERVAL_1HOUR
 print "running"
+out_fields = ['Ticker','Period','Open','High','Low','Close','P_Close','Volume','P_Volume','Vol_21_EMA','3 EMA','5 EMA','Signal_Line','Indicator','Vol_Indicator']
+
 client = Client("", "")
 tickers =  client.get_all_tickers()
 df_tickers = pd.DataFrame(tickers)
-df_fields = ['ticker','UTC_Time_Open','Open','High','Low','Close','Volume','UTC_Time_Close','Quote_asset_volume','Trades','TBBAV','TBQAV','IGNORE']
+df_fields = ['Ticker','UTC_Time_Open','Open','High','Low','Close','Volume','UTC_Time_Close','Quote_asset_volume','Trades','TBBAV','TBQAV','IGNORE']
 df = pd.DataFrame(columns=df_fields)
+#for symbol in  ['ENJBTC','ENJETH']:
 for symbol in  df_tickers['symbol'].unique():
     print symbol
 
     klines = get_historical_klines(symbol, interval, start, end)
-    fields = ['UTC_Time_Open','Open','High','Low','Close','Volume','UTC_Time_Close','Quote_asset_volume','Trades','TBBAV','TBQAV','IGNORE']
-    tmp_df = pd.DataFrame(klines)
-    tmp_df.columns = fields
-    tmp_df['ticker'] = symbol
-    df = df.append(tmp_df)
+    if len(klines) > 0:
+        fields = ['UTC_Time_Open','Open','High','Low','Close','Volume','UTC_Time_Close','Quote_asset_volume','Trades','TBBAV','TBQAV','IGNORE']
+        tmp_df = pd.DataFrame(klines)
+        tmp_df.columns = fields
+        tmp_df['Ticker'] = symbol
+        df = df.append(tmp_df)
+#    fields = ['UTC_Time_Open','Open','High','Low','Close','Volume','UTC_Time_Close','Quote_asset_volume','Trades','TBBAV','TBQAV','IGNORE']
+#    tmp_df = pd.DataFrame(klines)
+#    tmp_df.columns = fields
+#    tmp_df['Ticker'] = symbol
+#    df = df.append(tmp_df)
 
 #fileName = "Binance_{}_{}-{}.json".format(
 #        interval,
@@ -191,17 +205,26 @@ for symbol in  df_tickers['symbol'].unique():
 #df =pd.read_json(fileName)
 #df.columns = df_fields
 #print df.dtypes
-df['Date'] = df.apply(lambda row: conv_date(row['UTC_Time_Open']), axis=1)
+df['Period'] = df.apply(lambda row: conv_to_date(row['UTC_Time_Open']), axis=1)
 print(date_to_milliseconds("now UTC"))
-df = df.reset_index().sort_values(['ticker','Date'], ascending=[True, True])
+df = df.reset_index().sort_values(['Ticker','Period'], ascending=[True, True])
+df['Volume']=df['Volume'].apply(float)
 df['P_Volume'] = df['Volume'].shift(1)
+df['P_Volume'] = df.apply(lambda row: float_to_int(row['P_Volume']), axis=1)
 df['P_Close'] = df['Close'].shift(1)
-df['5 ema'] = df.groupby('ticker')['Close'].apply(lambda x:x.ewm(span=5,min_periods=5).mean()) 
-df['3 ema'] = df.groupby('ticker')['Close'].apply(lambda x:x.ewm(span=3,min_periods=3).mean())
-df['MACD'] = (df['3 ema'] - df['5 ema'])
-df['MACD_Signal_Line'] = df.groupby('ticker')['MACD'].apply(lambda x:x.ewm(span=13,min_periods=13).mean())
-df['MACD_SL_Crossover'] = np.where(df['MACD'] > df['MACD_Signal_Line'], 1, 0)
-df['MACD_SL_Crossover'] = np.where(df['MACD'] < df['MACD_Signal_Line'], -1, df['MACD_SL_Crossover'])
+df['5 EMA'] = df.groupby('Ticker')['Close'].apply(lambda x:x.ewm(span=5,min_periods=5).mean()) 
+df['3 EMA'] = df.groupby('Ticker')['Close'].apply(lambda x:x.ewm(span=3,min_periods=3).mean())
+df['Vol_21_EMA'] = df.groupby('Ticker')['Volume'].apply(lambda x:x.ewm(span=21,min_periods=21).mean())
+df['MACD'] = (df['3 EMA'] - df['5 EMA'])
+df['Signal_Line'] = df.groupby('Ticker')['MACD'].apply(lambda x:x.ewm(span=13,min_periods=13).mean())
+df['MACD_SL_Crossover'] = np.where(df['MACD'] > df['Signal_Line'], 1, 0)
+df['MACD_SL_Crossover'] = np.where(df['MACD'] < df['Signal_Line'], -1, df['MACD_SL_Crossover'])
 df['P_MACD_Crossover'] = df['MACD_SL_Crossover'].shift(1)
-df['macd_Flag'] = df.apply(lambda row: macd_flag(row['MACD_SL_Crossover'],row['P_MACD_Crossover']), axis=1)
-df.to_csv(r"binance_data.csv", index=False)
+#print df.dtypes
+
+df['Indicator'] = df.apply(lambda row: macd_flag(row['MACD_SL_Crossover'],row['P_MACD_Crossover']), axis=1)
+df['Vol_Indicator'] = df.apply(lambda row: vol_flag(row['Volume'],row['Vol_21_EMA']), axis=1)
+df=df[out_fields]
+df.to_csv(r"/home/ec2-user/binance/data/binance_data.csv", index=False)
+tList = df['Period'].tail(1).values
+
